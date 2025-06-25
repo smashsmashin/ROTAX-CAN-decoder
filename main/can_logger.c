@@ -59,11 +59,15 @@ void app_main(void)
     // e.g. TWAI_TIMING_CONFIG_500KBITS() can be used if available and suitable.
     // Let's stick to manual calculation first to ensure it's clear.
     // ESP_IDF twai.h uses .brp, .tseg_1, .tseg_2, .sjw, .triple_sampling
+    // For ESP32-C3, direct integer values for TSEG1, TSEG2, SJW are expected
+    // For 500kbps: TQ = 0.2us. With APB_CLK=80MHz, brp should be 16 (TQ = brp / APB_CLK for ESP32-C3 HAL).
+    // Total TQ per bit = 1 (sync) + tseg_1 (6) + tseg_2 (3) = 10 TQ.
+    // Bit time = 10 TQ * 0.2us/TQ = 2us => 1 / 2us = 500kbps.
     twai_timing_config_t t_config = {
-        .brp = 8, // Baudrate prescaler
-        .tseg_1 = TWAI_TIMING_TS1_6TQ, // Timing segment 1
-        .tseg_2 = TWAI_TIMING_TS2_3TQ, // Timing segment 2
-        .sjw = TWAI_TIMING_SJW_2TQ,    // Synchronization jump width
+        .brp = 16, // Baudrate prescaler (corrected from 8 for 500kbps)
+        .tseg_1 = 6, // Timing segment 1
+        .tseg_2 = 3, // Timing segment 2
+        .sjw = 2,    // Synchronization jump width
         .triple_sampling = false       // Disable triple sampling
     };
 
