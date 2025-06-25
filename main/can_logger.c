@@ -115,7 +115,7 @@ void app_main(void)
         if (status_err == ESP_OK && status_info.state == TWAI_STATE_BUS_OFF) { // Changed from CAN_STATE_BUS_OFF
             ESP_LOGW(TAG, "TWAI Bus Off detected. Attempting recovery...");
             gpio_set_level(STATUS_LED_GPIO, 1); // Turn LED ON for bus-off
-            esp_err_t recovery_err = twai_recover_from_bus_off(pdMS_TO_TICKS(1000)); // Changed from can_recover_from_bus_off
+            esp_err_t recovery_err = twai_initiate_recovery(); // Corrected function call
             if (recovery_err == ESP_OK) {
                 ESP_LOGI(TAG, "TWAI bus recovery initiated.");
                 // Check status again after attempting recovery
@@ -128,7 +128,7 @@ void app_main(void)
                     // LED remains ON
                 }
             } else {
-                ESP_LOGE(TAG, "TWAI bus recovery initiation failed."); // Corrected log
+                ESP_LOGE(TAG, "TWAI bus recovery initiation failed. Error: %s", esp_err_to_name(recovery_err));
                 // LED remains ON
             }
         } else if (status_err == ESP_OK && status_info.state == TWAI_STATE_RECOVERING) { // Corrected constant and log
