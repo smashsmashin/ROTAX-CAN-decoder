@@ -105,14 +105,25 @@ void app_main(void)
 
     ESP_LOGI(TAG, "TWAI Logger Initialized. Waiting for messages...");
 
+    uint32_t last_led_toggle_time_ms = 0;
+    bool heartbeat_led_state = false;
+    uint32_t last_alive_message_time_ms = 0;
+    const uint32_t alive_message_interval_ms = 10000; // 10 seconds
+    const uint32_t led_blink_interval_ms = 500;     // 0.5 seconds for ~1Hz blink
+
     // Main loop to receive and log TWAI messages
     while (1) {
+        uint32_t current_time_ms = esp_log_timestamp(); // Or use esp_timer_get_time() / 1000 for FreeRTOS ticks
+
         twai_message_t message; // Changed from can_message_t
         esp_err_t ret = twai_receive(&message, pdMS_TO_TICKS(100)); // Wait for 100ms, changed from can_receive
         twai_status_info_t status_info; // Changed from can_status_info_t
         esp_err_t status_err = twai_get_status_info(&status_info); // Changed from can_get_status_info
 
-        if (status_err == ESP_OK && status_info.state == TWAI_STATE_BUS_OFF) { // Changed from CAN_STATE_BUS_OFF
+        bool bus_error_or_recovering = false;
+
+        if (status_err == ESP_OK && status_info.state == TWAI_STATE_BUS_OFF) {
+            bus_error_or_recovering = true;
             ESP_LOGW(TAG, "TWAI Bus Off detected. Attempting recovery...");
             gpio_set_level(STATUS_LED_GPIO, 1); // Turn LED ON for bus-off
             esp_err_t recovery_err = twai_initiate_recovery(); // Corrected function call
@@ -129,44 +140,91 @@ void app_main(void)
                 }
             } else {
                 ESP_LOGE(TAG, "TWAI bus recovery initiation failed. Error: %s", esp_err_to_name(recovery_err));
-                // LED remains ON
+                // LED remains ON (bus_error_or_recovering is true, so LED will be set to 1)
             }
-        } else if (status_err == ESP_OK && status_info.state == TWAI_STATE_RECOVERING) { // Corrected constant and log
-            ESP_LOGI(TAG, "TWAI bus is in RECOVERING state."); // Corrected log
-            gpio_set_level(STATUS_LED_GPIO, 1); // LED ON during recovery
+        } else if (status_err == ESP_OK && status_info.state == TWAI_STATE_RECOVERING) {
+            bus_error_or_recovering = true;
+            ESP_LOGI(TAG, "TWAI bus is in RECOVERING state.");
+            // LED will be set to 1 due to bus_error_or_recovering
+        } else if (status_err != ESP_OK) {
+            // Failed to get bus status, assume error for LED
+            bus_error_or_recovering = true;
+            ESP_LOGE(TAG, "Failed to get TWAI status. Error: %s", esp_err_to_name(status_err));
         }
 
 
         if (ret == ESP_OK) {
+            // Message received
+            if (!bus_error_or_recovering && status_info.state == TWAI_STATE_RUNNING) {
+                gpio_set_level(STATUS_LED_GPIO, 0); // Solid OFF when actively receiving and bus OK
+            }
             // Log received message to USB serial
-            printf("TWAI RX: ID=0x%03lX DLC=%d Data=", message.identifier, message.data_length_code); // Corrected log prefix
+            printf("TWAI RX: ID=0x%03lX DLC=%d Data=", message.identifier, message.data_length_code);
             for (int i = 0; i < message.data_length_code; i++) {
                 printf("0x%02X ", message.data[i]);
             }
-            if (message.flags & TWAI_MSG_FLAG_EXTD) { // Corrected constant
+            if (message.flags & TWAI_MSG_FLAG_EXTD) {
                 printf("(EXTD) ");
             }
-            if (message.flags & TWAI_MSG_FLAG_RTR) { // Corrected constant
+            if (message.flags & TWAI_MSG_FLAG_RTR) {
                 printf("(RTR) ");
             }
             printf("\n");
 
-            // If we are receiving messages, bus should be running, turn LED off if it was on.
-            if (status_err == ESP_OK && status_info.state == TWAI_STATE_RUNNING) { // Corrected constant
-                gpio_set_level(STATUS_LED_GPIO, 0);
-            }
-
         } else if (ret == ESP_ERR_TIMEOUT) {
-            // No message received. If bus is running, LED should be off.
-            // If bus was off and recovered to running but no messages yet, LED is handled above.
-            if (status_err == ESP_OK && status_info.state == TWAI_STATE_RUNNING) { // Corrected constant
-                gpio_set_level(STATUS_LED_GPIO, 0);
-            }
-            // If timeout occurs and bus is found to be OFF, the check at the beginning of the loop will handle it.
-        } else { // Other errors from twai_receive
-            ESP_LOGE(TAG, "Failed to receive TWAI message, error: %s", esp_err_to_name(ret)); // Corrected log
+            // No message received within timeout
+            // Heartbeat LED and alive message logic will apply here if bus is RUNNING
+        } else {
+            // Other error from twai_receive
+            ESP_LOGE(TAG, "Failed to receive TWAI message, error: %s", esp_err_to_name(ret));
             // The check for BUS_OFF at the start of the loop should also cover this scenario if it leads to bus off.
+            // If not bus_off, but some other receive error, bus_error_or_recovering might still be false.
+            // Consider if LED should indicate this type of error too. For now, it doesn't explicitly.
         }
-        vTaskDelay(pdMS_TO_TICKS(10)); // Small delay to yield to other tasks
+
+        // Manage LED based on overall state
+        if (bus_error_or_recovering) {
+            gpio_set_level(STATUS_LED_GPIO, 1); // Solid ON for BUS_OFF or RECOVERING
+            heartbeat_led_state = false; // Reset heartbeat state if error occurs
+        } else {
+            // Bus is RUNNING (or status couldn't be read but no specific error state found)
+            // Implement heartbeat blink if no messages were received in this cycle (ret == ESP_ERR_TIMEOUT)
+            // or if we decide to blink even with messages (current logic: solid off with messages).
+            // For now, blink only on timeout and bus RUNNING.
+            if (status_err == ESP_OK && status_info.state == TWAI_STATE_RUNNING) {
+                if (current_time_ms - last_led_toggle_time_ms >= led_blink_interval_ms) {
+                    heartbeat_led_state = !heartbeat_led_state;
+                    gpio_set_level(STATUS_LED_GPIO, heartbeat_led_state);
+                    last_led_toggle_time_ms = current_time_ms;
+                }
+            } else if (status_err != ESP_OK) {
+                // If status read failed, and not already handled as bus_error_or_recovering
+                // default to LED ON to indicate some unknown issue.
+                 gpio_set_level(STATUS_LED_GPIO, 1);
+            }
+            // If ret == ESP_OK (message received), LED is set to 0 above.
+            // This means heartbeat blinking is overridden by message reception.
+        }
+
+        // Periodic "System alive" message
+        if (status_err == ESP_OK && status_info.state == TWAI_STATE_RUNNING) {
+            if (current_time_ms - last_alive_message_time_ms >= alive_message_interval_ms) {
+                // It's time to print the alive message
+                // Optionally, only print if no CAN messages were received in this specific cycle,
+                // or just print regardless as a general heartbeat.
+                // For "running without can" check, printing when idle is good.
+                if (ret == ESP_ERR_TIMEOUT) { // Only print if no CAN message was received in the last 100ms check
+                    printf("[%lu ms] System alive. TWAI Bus: RUNNING. No new CAN messages in last check cycle.\n", current_time_ms);
+                } else if (ret == ESP_OK) {
+                    // If messages are flowing, we could print a different alive message or skip.
+                    // For now, let's also indicate alive even with messages, but slightly different.
+                     printf("[%lu ms] System alive. TWAI Bus: RUNNING. Actively processing CAN messages.\n", current_time_ms);
+                }
+                last_alive_message_time_ms = current_time_ms;
+            }
+        }
+
+
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
