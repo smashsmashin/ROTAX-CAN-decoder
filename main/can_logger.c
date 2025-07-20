@@ -15,6 +15,8 @@ static const char *TAG = "TWAI_LOGGER"; // Renamed from CAN_LOGGER
 
 // Define Status LED Pin
 #define STATUS_LED_GPIO GPIO_NUM_2 // Example: GPIO2 for status LED
+#define OUT_1_GPIO GPIO_NUM_0
+#define OUT_2_GPIO GPIO_NUM_1
 
 // Function to initialize LED
 static void configure_led(void)
@@ -24,9 +26,20 @@ static void configure_led(void)
     gpio_set_direction(STATUS_LED_GPIO, GPIO_MODE_OUTPUT);
 }
 
+// Function to initialize Outputs
+static void configure_outputs(void)
+{
+    gpio_reset_pin(OUT_1_GPIO);
+    gpio_reset_pin(OUT_2_GPIO);
+    /* Set the GPIO as a push/pull output */
+    gpio_set_direction(OUT_1_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_direction(OUT_2_GPIO, GPIO_MODE_OUTPUT);
+}
+
 void app_main(void)
 {
     configure_led();
+    configure_outputs();
     gpio_set_level(STATUS_LED_GPIO, 0); // Start with LED OFF
 
     // Initialize general purpose configuration for TWAI
@@ -170,6 +183,30 @@ void app_main(void)
                 printf("(RTR) ");
             }
             printf("\n");
+
+            // Check for specific CAN IDs
+            switch (message.identifier) {
+                case 556: // Engine Status (Line A)
+                case 620: // Engine Status (Line B)
+                    if (message.data_length_code == 8 && message.data[1] == 5) {
+                        uint8_t mode_byte = message.data[7];
+                        // Bit 2 of byte 7 indicates the mode
+                        // 0: Power Mode, 1: Economy Mode
+                        if (mode_byte & 0x02) { // Economy Mode
+                            ESP_LOGI(TAG, "Economy Mode detected");
+                            gpio_set_level(OUT_1_GPIO, 1);
+                            gpio_set_level(OUT_2_GPIO, 0);
+                        } else { // Power Mode
+                            ESP_LOGI(TAG, "Power Mode detected");
+                            gpio_set_level(OUT_1_GPIO, 0);
+                            gpio_set_level(OUT_2_GPIO, 1);
+                        }
+                    }
+                    break;
+                default:
+                    // Not an engine status message
+                    break;
+            }
 
         } else if (ret == ESP_ERR_TIMEOUT) {
             // No message received within timeout
