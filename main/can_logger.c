@@ -44,43 +44,21 @@ void app_main(void)
 
     // Initialize general purpose configuration for TWAI
     twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(TWAI_TX_PIN, TWAI_RX_PIN, TWAI_MODE_NORMAL);
-    // Initialize timing configuration for 500kbps
-    // Common baud rates: 125kbps, 250kbps, 500kbps, 1Mbps
-    // TQ = 1 / (APB CLK / Prescaler)
+    // Initialize timing configuration for 125kbps
     // APB CLK for ESP32-C3 is typically 80MHz.
-    // For 500kbps, with APB_CLK=80MHz, a common setting is prescaler=8, resulting in 10 TQ per bit.
-    // Sync Seg=1, BS1=6, BS2=3. Total 1+6+3 = 10 TQ.
-    // (1 + BS1 + BS2) * (Prescaler / APB_CLK) = Bit Time
-    // (1 + 6 + 3) * (8 / 80MHz) = 10 * 0.1us = 1us => 1Mbps. This is not 500kbps.
-    // Let's recalculate for 500kbps.
-    // Bit time = 1 / 500000 = 2us.
-    // We need (1 + BS1 + BS2) * (Prescaler / 80MHz) = 2us
-    // Let Prescaler = 16. Then (1 + BS1 + BS2) * (16 / 80MHz) = 2us
-    // (1 + BS1 + BS2) * 0.2us = 2us
-    // (1 + BS1 + BS2) = 10.
-    // So, Sync=1, BS1=6, BS2=3 would work. Or BS1=5, BS2=4. Let's use ESP-IDF defaults if possible or common values.
-    // ESP-IDF defaults often work well. For 500kbps:
-    // brp = 8 -> Tbit = (1+tseg1+tseg2)*tq = (1+15+4)* (2*8/80Mhz) = 20 * 0.2us = 4us -> 250kbps. This is not 500kbps.
-    // Let's try settings for 500kbps:
-    // Prescaler (brp) = 8. tq = 2 * brp / APB_CLK = 16 / 80MHz = 0.2us
-    // Number of TQ per bit = 1 / (500kbps * 0.2us) = 1 / (500000 * 0.0000002) = 1 / 0.1 = 10 TQ.
-    // So, we need TSEG1 + TSEG2 + 1 = 10.
-    // Let TSEG1 = 6, TSEG2 = 3. (Sample point at 1+6/10 = 70%)
-    // ESP32-C3 TWAI controller might have slightly different enums or typical values,
-    // but the principle for brp, tseg1, tseg2, sjw remains.
-    // For ESP-IDF 4.3+ (which uses TWAI), the timing enum values might be slightly different
-    // e.g. TWAI_TIMING_CONFIG_500KBITS() can be used if available and suitable.
-    // Let's stick to manual calculation first to ensure it's clear.
-    // ESP_IDF twai.h uses .brp, .tseg_1, .tseg_2, .sjw, .triple_sampling
-    // For ESP32-C3, direct integer values for TSEG1, TSEG2, SJW are expected
-    // For 500kbps: TQ = 0.2us. With APB_CLK=80MHz, brp should be 16 (TQ = brp / APB_CLK for ESP32-C3 HAL).
-    // Total TQ per bit = 1 (sync) + tseg_1 (6) + tseg_2 (3) = 10 TQ.
-    // Bit time = 10 TQ * 0.2us/TQ = 2us => 1 / 2us = 500kbps.
+    // Bit time for 125kbps = 1 / 125000 = 8us.
+    // We need (1 + tseg_1 + tseg_2) * (brp / 80MHz) = 8us.
+    // Let's choose a prescaler (brp). A larger prescaler allows for more TQ per bit, giving more flexibility.
+    // Let brp = 32. Then tq = 32 / 80MHz = 0.4us.
+    // Number of TQ per bit = 8us / 0.4us = 20.
+    // So, 1 + tseg_1 + tseg_2 = 20. Let tseg_1 = 15, tseg_2 = 4.
+    // This gives a sample point of (1+15)/20 = 80%, which is a common value.
+    // SJW is often set to 3 or 4.
     twai_timing_config_t t_config = {
-        .brp = 16, // Baudrate prescaler (corrected from 8 for 500kbps)
-        .tseg_1 = 6, // Timing segment 1
-        .tseg_2 = 3, // Timing segment 2
-        .sjw = 2,    // Synchronization jump width
+        .brp = 32, // Baudrate prescaler
+        .tseg_1 = 15, // Timing segment 1
+        .tseg_2 = 4, // Timing segment 2
+        .sjw = 3,    // Synchronization jump width
         .triple_sampling = false       // Disable triple sampling
     };
 
