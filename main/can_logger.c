@@ -15,6 +15,8 @@ static const char *TAG = "TWAI_LOGGER"; // Renamed from CAN_LOGGER
 
 // Define Status LED Pin
 #define STATUS_LED_GPIO GPIO_NUM_2 // Example: GPIO2 for status LED
+#define OUT_1_GPIO GPIO_NUM_0
+#define OUT_2_GPIO GPIO_NUM_1
 
 // Function to initialize LED
 static void configure_led(void)
@@ -24,9 +26,42 @@ static void configure_led(void)
     gpio_set_direction(STATUS_LED_GPIO, GPIO_MODE_OUTPUT);
 }
 
+// Function to initialize Outputs
+static void configure_outputs(void)
+{
+    gpio_reset_pin(OUT_1_GPIO);
+    gpio_reset_pin(OUT_2_GPIO);
+    /* Set the GPIO as a push/pull output */
+    gpio_set_direction(OUT_1_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_direction(OUT_2_GPIO, GPIO_MODE_OUTPUT);
+
+    for(int i=0; i<2; i++) {
+        gpio_set_level(OUT_1_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(250));
+        gpio_set_level(OUT_1_GPIO, 0);
+        gpio_set_level(OUT_2_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(250));
+        gpio_set_level(OUT_2_GPIO, 0);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+static void signal_failure() {
+    // Rapidly blink LED on critical failure
+    while(1) {
+        gpio_togle_level(OUT_1_GPIO);
+        gpio_set_level(STATUS_LED_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(100));
+        gpio_togle_level(OUT_2_GPIO);
+        gpio_set_level(STATUS_LED_GPIO, 0);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
 void app_main(void)
 {
     configure_led();
+    configure_outputs();
     gpio_set_level(STATUS_LED_GPIO, 0); // Start with LED OFF
 
     // Initialize general purpose configuration for TWAI
@@ -56,13 +91,7 @@ void app_main(void)
     ESP_LOGI(TAG, "Installing TWAI driver...");
     if (twai_driver_install(&g_config, &t_config, &f_config) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to install TWAI driver.");
-        // Rapidly blink LED on critical failure
-        while(1) {
-            gpio_set_level(STATUS_LED_GPIO, 1);
-            vTaskDelay(pdMS_TO_TICKS(100));
-            gpio_set_level(STATUS_LED_GPIO, 0);
-            vTaskDelay(pdMS_TO_TICKS(100));
-        }
+        signal_failure();
     }
     ESP_LOGI(TAG, "TWAI driver installed.");
 
@@ -70,24 +99,19 @@ void app_main(void)
     ESP_LOGI(TAG, "Starting TWAI driver...");
     if (twai_start() != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start TWAI driver.");
-        // Rapidly blink LED on critical failure
-        while(1) {
-            gpio_set_level(STATUS_LED_GPIO, 1);
-            vTaskDelay(pdMS_TO_TICKS(100));
-            gpio_set_level(STATUS_LED_GPIO, 0);
-            vTaskDelay(pdMS_TO_TICKS(100));
-        }
+        signal_failure();
     }
     ESP_LOGI(TAG, "TWAI driver started.");
     gpio_set_level(STATUS_LED_GPIO, 0); // LED OFF, TWAI initialized successfully
 
     ESP_LOGI(TAG, "TWAI Logger Initialized. Waiting for messages...");
 
-    uint32_t last_led_toggle_time_ms = 0;
-    bool heartbeat_led_state = false;
+    bool packet_received = false;
+    uint32_t led_on_time_ms = 0;
+    const uint32_t led_on_interval_ms = 100;     // 0.5 seconds for ~1Hz blink
+
     uint32_t last_alive_message_time_ms = 0;
     const uint32_t alive_message_interval_ms = 10000; // 10 seconds
-    const uint32_t led_blink_interval_ms = 500;     // 0.5 seconds for ~1Hz blink
 
     // Main loop to receive and log TWAI messages
     while (1) {
@@ -149,6 +173,36 @@ void app_main(void)
             }
             printf("\n");
 
+            // Check for specific CAN IDs
+            switch (message.identifier) {
+                case 556: // Engine 1 Status (Line A)
+                case 557: // Engine 2 Status (Line A)
+                case 620: // Engine 1 Status (Line B)
+                case 621: // Engine 2 Status (Line B)
+                    if (message.data_length_code == 8 && message.data[1] == 5 /*BLONG*/) {
+                        packet_received = true;
+                        led_on_time_ms = current_time_ms;
+                        gpio_set_level(STATUS_LED_GPIO, 1);
+
+                        uint8_t status_byte_4 = message.data[7];
+                        // Bit 2 of byte 7 indicates the mode
+                        // 0: Power Mode, 1: Economy Mode
+                        if (status_byte_4 & 0x02) { // Economy Mode
+                            ESP_LOGI(TAG, "Economy Mode detected");
+                            gpio_set_level(OUT_1_GPIO, 1);
+                            gpio_set_level(OUT_2_GPIO, 0);
+                        } else { // Power Mode
+                            ESP_LOGI(TAG, "Power Mode detected");
+                            gpio_set_level(OUT_1_GPIO, 0);
+                            gpio_set_level(OUT_2_GPIO, 1);
+                        }
+                    }
+                    break;
+                default:
+                    // Not an engine status message
+                    break;
+            }
+
         } else if (ret == ESP_ERR_TIMEOUT) {
             // No message received within timeout
             // Heartbeat LED and alive message logic will apply here if bus is RUNNING
@@ -161,27 +215,14 @@ void app_main(void)
         }
 
         // Manage LED based on overall state
-        if (bus_error_or_recovering) {
+        if (bus_error_or_recovering || status_err != ESP_OK) {
             gpio_set_level(STATUS_LED_GPIO, 1); // Solid ON for BUS_OFF or RECOVERING
-            heartbeat_led_state = false; // Reset heartbeat state if error occurs
-        } else {
-            // Bus is RUNNING (or status couldn't be read but no specific error state found)
-            // Implement heartbeat blink if no messages were received in this cycle (ret == ESP_ERR_TIMEOUT)
-            // or if we decide to blink even with messages (current logic: solid off with messages).
-            // For now, blink only on timeout and bus RUNNING.
-            if (status_err == ESP_OK && status_info.state == TWAI_STATE_RUNNING) {
-                if (current_time_ms - last_led_toggle_time_ms >= led_blink_interval_ms) {
-                    heartbeat_led_state = !heartbeat_led_state;
-                    gpio_set_level(STATUS_LED_GPIO, heartbeat_led_state);
-                    last_led_toggle_time_ms = current_time_ms;
-                }
-            } else if (status_err != ESP_OK) {
-                // If status read failed, and not already handled as bus_error_or_recovering
-                // default to LED ON to indicate some unknown issue.
-                 gpio_set_level(STATUS_LED_GPIO, 1);
+            packet_received = false; // Reset heartbeat state if error occurs
+        } else if(packet_received) {
+            if (current_time_ms - led_on_time_ms >= led_on_interval_ms) {
+                packet_received = false;
+                gpio_set_level(STATUS_LED_GPIO, 0);
             }
-            // If ret == ESP_OK (message received), LED is set to 0 above.
-            // This means heartbeat blinking is overridden by message reception.
         }
 
         // Periodic "System alive" message
