@@ -49,10 +49,10 @@ static void configure_outputs(void)
 static void signal_failure() {
     // Rapidly blink LED on critical failure
     while(1) {
-        gpio_togle_level(OUT_1_GPIO);
+        gpio_set_level(OUT_1_GPIO, !gpio_get_level(OUT_1_GPIO));
         gpio_set_level(STATUS_LED_GPIO, 1);
         vTaskDelay(pdMS_TO_TICKS(100));
-        gpio_togle_level(OUT_2_GPIO);
+        gpio_set_level(OUT_2_GPIO, !gpio_get_level(OUT_2_GPIO));
         gpio_set_level(STATUS_LED_GPIO, 0);
         vTaskDelay(pdMS_TO_TICKS(100));
     }
