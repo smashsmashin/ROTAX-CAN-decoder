@@ -35,15 +35,24 @@ static void configure_outputs(void)
     gpio_set_direction(OUT_1_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_direction(OUT_2_GPIO, GPIO_MODE_OUTPUT);
 
-    gpio_set_level(OUT_1_GPIO, 0);
-    gpio_set_level(OUT_2_GPIO, 0);
+    for(int i=0; i<2; i++) {
+        gpio_set_level(OUT_1_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(250));
+        gpio_set_level(OUT_1_GPIO, 0);
+        gpio_set_level(OUT_2_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(250));
+        gpio_set_level(OUT_2_GPIO, 0);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 }
 
 static void signal_failure() {
     // Rapidly blink LED on critical failure
     while(1) {
+        gpio_togle_level(OUT_1_GPIO);
         gpio_set_level(STATUS_LED_GPIO, 1);
         vTaskDelay(pdMS_TO_TICKS(100));
+        gpio_togle_level(OUT_2_GPIO);
         gpio_set_level(STATUS_LED_GPIO, 0);
         vTaskDelay(pdMS_TO_TICKS(100));
     }
