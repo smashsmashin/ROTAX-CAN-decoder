@@ -3,35 +3,29 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
-#include "driver/twai.h" // Changed from can.h to twai.h
+#include "driver/twai.h"
 #include "esp_log.h"
 
-// Define TWAI pins based on schematic
-#define TWAI_TX_PIN GPIO_NUM_21 // Renamed from CAN_TX_PIN
-#define TWAI_RX_PIN GPIO_NUM_20 // Renamed from CAN_RX_PIN
+#define TWAI_TX_PIN GPIO_NUM_21
+#define TWAI_RX_PIN GPIO_NUM_20
 
-// Tag for logging
-static const char *TAG = "TWAI_LOGGER"; // Renamed from CAN_LOGGER
+static const char *TAG = "TWAI_LOGGER";
 
-// Define Status LED Pin
-#define STATUS_LED_GPIO GPIO_NUM_2 // Example: GPIO2 for status LED
+#define STATUS_LED_GPIO GPIO_NUM_2
 #define OUT_1_GPIO GPIO_NUM_0
 #define OUT_2_GPIO GPIO_NUM_1
 
-// Function to initialize LED
 static void configure_led(void)
 {
     gpio_reset_pin(STATUS_LED_GPIO);
-    /* Set the GPIO as a push/pull output */
     gpio_set_direction(STATUS_LED_GPIO, GPIO_MODE_OUTPUT);
 }
 
-// Function to initialize Outputs
 static void configure_outputs(void)
 {
     gpio_reset_pin(OUT_1_GPIO);
     gpio_reset_pin(OUT_2_GPIO);
-    /* Set the GPIO as a push/pull output */
+
     gpio_set_direction(OUT_1_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_direction(OUT_2_GPIO, GPIO_MODE_OUTPUT);
 
@@ -102,13 +96,13 @@ void app_main(void)
         signal_failure();
     }
     ESP_LOGI(TAG, "TWAI driver started.");
-    gpio_set_level(STATUS_LED_GPIO, 0); // LED OFF, TWAI initialized successfully
+    gpio_set_level(STATUS_LED_GPIO, 0);
 
     ESP_LOGI(TAG, "TWAI Logger Initialized. Waiting for messages...");
 
     bool packet_received = false;
     uint32_t led_on_time_ms = 0;
-    const uint32_t led_on_interval_ms = 100;     // 0.5 seconds for ~1Hz blink
+    const uint32_t led_on_interval_ms = 100;
 
     uint32_t last_alive_message_time_ms = 0;
     const uint32_t alive_message_interval_ms = 10000; // 10 seconds
